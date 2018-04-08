@@ -8,10 +8,11 @@ The experiment is based on TensorFlow platform.
 ### hierarchical model
 The model_code directory contains the train/dev/test data and codes of hierarchical attention model. 
 To get the predict answer, run
-''''
+```
     $ cd model_code
     $ python model_tf.py
-''''
+    
+```    
 The answer will be saved as test_answer in the current directory.
 
 ### ensemble model
