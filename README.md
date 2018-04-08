@@ -31,3 +31,4 @@ The accuracy after voted will be print on the screen, and the new answer file wi
 ## Result 
 The results of our experiments are as shown.
 
+![github](https://github.com/zhaomeiqian/SemEval2018--argument_reasoning_comprehension/blob/master/result.png)
