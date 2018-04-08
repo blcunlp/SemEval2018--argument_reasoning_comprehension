@@ -11,15 +11,23 @@ To get the predict answer, run
 ```
     $ cd model_code
     $ python model_tf.py
-    
 ```    
 The answer will be saved as test_answer in the current directory.
 
 ### ensemble model
 The ensemble directory contains scripts for majority voting. Put the different dev answer files into dev_answers directory, and run 
+```    
     $ perl voting_dev.pl 
+```
 The accuracy after voted will be print on the screen, and the new answer file will be saved as dev_voted_answer 
     
 Put the different test answer files into dev_answers directory, and run 
+```
     $ perl voting_test.pl 
+```
 The accuracy after voted will be print on the screen, and the new answer file will be saved as test_voted_answer
+
+
+## Result 
+The results of our experiments are as shown.
+
