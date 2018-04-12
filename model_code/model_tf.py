@@ -99,7 +99,8 @@ class InitModel:
                 else:
                     scope.reuse_variables()
                     self.outputs, self.final_state = tf.nn.bidirectional_dynamic_rnn(
-                            self.cell_fw, self.cell_bw, self.input_emb[i], sequence_length=self.input_length[i], dtype=tf.float32)
+                            self.cell_fw, self.cell_bw, self.input_emb[i], sequence_length=self.input_length[i],
+                            dtype=tf.float32)
                 biLstm_outputs = tf.concat(self.outputs ,2)
                 self.biLSTM_outputs_list.append(biLstm_outputs)
                 final_state_fw = self.final_state[0]
@@ -109,6 +110,55 @@ class InitModel:
                 last_sent_represent = tf.concat([h_fw, h_bw], -1)
                 self.last_sent_represent_list.append(last_sent_represent)
 
+
+        if self.rich_context:
+            attention_vector_for_w0 = tf.concat([self.last_sent_represent_list[0],self.last_sent_represent_list[2], self.last_sent_represent_list[3], self.last_sent_represent_list[4]], axis=1)
+            #q for w0
+            self.w_r_0 = tf.get_variable("w_r_0", shape=[8 * self.lstm_size, self.lstm_size],
+                                        regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            attention_w0 = tf.matmul(attention_vector_for_w0,self.w_r_0, name="w0_r")
+            self.attention_vector_for_w0 = tf.nn.dropout(attention_w0, self.keep_prob_placeholder)
+            print("self.attention_vector_for_w0 ######",self.attention_vector_for_w0)
+            # q for w1  concat then reduce dim
+            attention_vector_for_w1 = tf.concat([self.last_sent_represent_list[1],self.last_sent_represent_list[2], self.last_sent_represent_list[3], self.last_sent_represent_list[4]], axis=1)
+            self.w_r_1 = tf.get_variable("w_r_1", shape=[8 * self.lstm_size, self.lstm_size],
+                                        regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            attention_w1 = tf.matmul(attention_vector_for_w1,self.w_r_1, name="w1_r")
+            self.attention_vector_for_w1 = tf.nn.dropout(attention_w1, self.keep_prob_placeholder)
+            print("attention_vector_for_w1*********", self.attention_vector_for_w1)
+        else:
+            attention_vector_for_w0 = tf.concat([self.last_sent_represent_list[1],self.last_sent_represent_list[2], self.last_sent_represent_list[3]], axis=1)
+
+            #q for w0
+            self.w_p_0 = tf.get_variable("w_p_0", shape=[6 * self.lstm_size, self.lstm_size],
+                                        regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            attention_w0 = tf.matmul(attention_vector_for_w0,self.w_p_0, name="w0_p")
+            self.attention_vector_for_w0 = tf.nn.dropout(attention_w0, self.keep_prob_placeholder)
+            print("self.attention_vector_for_w0 ######",self.attention_vector_for_w0)
+            # q for w1  concat then reduce dim
+            attention_vector_for_w1 = tf.concat([self.last_sent_represent_list[0],self.last_sent_represent_list[2], self.last_sent_represent_list[3]], axis=1)
+
+            self.w_r_1 = tf.get_variable("w_p_1", shape=[6 * self.lstm_size, self.lstm_size],
+                                        regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            attention_w1 = tf.matmul(attention_vector_for_w1,self.w_r_1, name="w1_p")
+            self.attention_vector_for_w1 = tf.nn.dropout(attention_w1, self.keep_prob_placeholder)
+            print("attention_vector_for_w1*********", self.attention_vector_for_w1)
+
+        with tf.variable_scope("encode_x"):
+            self.w0_output=self.two_layer_tensordot(self.input_emb[0],self.lstm_size,scope="x_fnn")
+            #self.x_output=self.x_output*self.x_mask[:,:,None]
+
+        with tf.variable_scope("encode_y"):
+            self.w1_output=self.two_layer_tensordot(self.input_emb[1],self.lstm_size,scope="y_fnn")
+            #self.y_output=self.y_output*self.y_mask[:,:,None]
+
+        with tf.variable_scope("dot-product-atten"):
+            #weightd_w1:(b,x_len,2*h),weighted_w0:(b,y_len,2*h)
+            weighted_w1, weighted_w0 =self.dot_product_attention(x_sen=self.w0_output,y_sen=self.w1_output,x_len = self.max_len,y_len=self.max_len)
+            #self.mul_w0 = tf.matmul(weighted_w0,self.biLSTM_outputs_list[0])
+            #self.mul_w1 = tf.matmul(weighted_w1,self.biLSTM_outputs_list[1])
+            #self.diff_w0 = tf.subtract(self.biLSTM_outputs_list[0],weighted_w0)
+            #self.diff_w1 = tf.subtract(self.biLSTM_outputs_list[1],weighted_w1)
     def tensordot(self,inp,out_dim,in_dim=None,activation=None,use_bias=False,w_name="batch-fnn-W"):
         '''
         function: the implement of FNN ,input is a 3D batch tesor,W is a 2D tensor
@@ -175,36 +225,52 @@ class InitModel:
         return weighted_y,weighted_x
 
     def attention(self):
+        batch_size = self.batch_size
+        with tf.variable_scope("attetnion"):
+            self.w_am = tf.get_variable("w_am", shape=[2*self.lstm_size, self.lstm_size],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            #warrant0_biLstm_outputs shape is (bat,max_len,lstm_size*2)
+            w_am_w0 = tf.matmul(tf.reshape(self.biLSTM_outputs_list[0], shape=[-1, 2*self.lstm_size]),self.w_am, name="wam_w0")
+            #w_am_w0 = tf.matmul(self.warrant0_biLstm_outputs,self.w_am, name="wam_w0")
+            w_am_w0 = tf.reshape(w_am_w0, shape=[-1, self.max_len, self.lstm_size])
+            self.w_qm = tf.get_variable("w_qm", shape=[ self.lstm_size, self.lstm_size],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            w_qm_w0 = tf.reshape(tf.matmul(self.attention_vector_for_w0,self.w_qm, name="wam_w0"),shape=[-1,1,self.lstm_size])
+            m_w0=tf.tanh(w_am_w0+w_qm_w0)
+
+            self.WT = tf.get_variable("WT", shape=[self.lstm_size, 1],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))  # h x 1
+            WTm_w0 = tf.matmul(tf.reshape(m_w0, shape=[-1, self.lstm_size]), self.WT)
+            s_w0 = tf.nn.softmax(
+                tf.reshape(WTm_w0, shape=[-1, 1, self.max_len], name="s_w0"))  # b x 1 x max_len
+            w0_after_attention = tf.matmul(s_w0, self.biLSTM_outputs_list[0])  # [b x 1 x max_len]*[b x max_len x 2*hidden_units] =[b x max_len  x 2*hidden_units]
+            self.w0_after_attention = tf.nn.dropout(w0_after_attention, self.keep_prob_placeholder)
+
+
+        with tf.variable_scope("w1_attention"):
+            self.w_am1 = tf.get_variable("w_am1", shape=[2 * self.lstm_size, self.lstm_size],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            w_am_w1 = tf.matmul(tf.reshape(self.biLSTM_outputs_list[1], shape=[-1, 2 * self.lstm_size]), self.w_am1, name="wam_w1")
+            w_am_w1 = tf.reshape(w_am_w1, shape=[-1, self.max_len, self.lstm_size])
+            print("self.w_am_w1", w_am_w1)
+
+            self.w_qm1 = tf.get_variable("w_qm1", shape=[self.lstm_size, self.lstm_size],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
+            w_qm_w1 = tf.reshape(tf.matmul(self.attention_vector_for_w1, self.w_qm1, name="wam_w1"),shape=[-1,1,self.lstm_size])
+            print("self.w_qm_w1", w_qm_w1)
+            m_w1 = tf.tanh(w_am_w1 + w_qm_w1)
+
+            self.WT1 = tf.get_variable("WT1", shape=[self.lstm_size, 1],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))  # h x 1
+            WTm_w1 = tf.matmul(
+                tf.reshape(m_w1, shape=[-1, self.lstm_size]),
+                self.WT1)
+            s_w1 = tf.nn.softmax(
+                tf.reshape(WTm_w1, shape=[-1, 1, self.max_len], name="s_w1"))  # b x 1 x max_len
+            w1_after_attention = tf.matmul(s_w1, self.biLSTM_outputs_list[1])  # [b x 1 x max_len]*[b x max_len x 2*hidden
+            self.w1_after_attention = tf.nn.dropout(w1_after_attention, self.keep_prob_placeholder)
         with tf.variable_scope("dot_layer"):
-            weighted1, weighted0 =self.dot_product_attention(x_sen=self.biLSTM_outputs_list[0],y_sen=self.biLSTM_outputs_list[1],x_len = self.max_len,y_len=self.max_len)
-            diff_01 = tf.subtract(self.biLSTM_outputs_list[0],weighted1)
-            diff_10 = tf.subtract(self.biLSTM_outputs_list[1],weighted0)
-            mul_01 = tf.multiply(self.biLSTM_outputs_list[0],weighted0)
-            mul_10 = tf.multiply(self.biLSTM_outputs_list[1],weighted1)
-            mix_01 = tf.concat([self.biLSTM_outputs_list[0],weighted1,diff_01,mul_01],axis=2)
-            mix_10 = tf.concat([self.biLSTM_outputs_list[1],weighted0,diff_10,mul_10],axis=2)
-            with tf.variable_scope("aggregate-fnn") as scope:
-                m_xy = self.tensordot(inp=mix_01,
-                                    out_dim= self.lstm_size,
-                                    activation=tf.nn.relu,
-                                    use_bias=True,
-                                    w_name="fnn-mxy_W")
-                scope.reuse_variables()
-                m_yx = self.tensordot(inp=mix_10,
-                                    out_dim= self.lstm_size,
-                                    activation=tf.nn.relu,
-                                    use_bias=True,
-                                    w_name="fnn-mxy_W")
-
-            if self.train_or_others:
-                self.m_xy = tf.nn.dropout(m_xy,self.keep_prob_placeholder)
-                self.m_yx = tf.nn.dropout(m_yx,self.keep_prob_placeholder)
-
+            weighted1, weighted0 =self.dot_product_attention(x_sen=self.w0_after_attention,y_sen=self.w1_after_attention,x_len = self.max_len,y_len=self.max_len)
+            diff_01 = tf.subtract(self.w0_after_attention,weighted1)
+            diff_10 = tf.subtract(self.w1_after_attention,weighted0)
+            mul_01 = tf.multiply(self.w0_after_attention,weighted1)
+            mul_10 = tf.multiply(self.w1_after_attention,weighted0)
         #cocat of w0 representation and w1 representation
-        max_info=tf.reduce_max(tf.concat([self.m_xy,self.m_yx],axis=2),axis=1)  #(b,4h)
-        min_info=tf.reduce_min(tf.concat([self.m_xy,self.m_yx],axis=2),axis=1)  #(b,4h)
-        sum_info=tf.reduce_sum(tf.concat([self.m_xy,self.m_yx],axis=2),axis=1)  #(b,4h)
-        pred_info=tf.concat([max_info,min_info,sum_info],axis=1)
+        pred_info=tf.reduce_max(tf.concat([diff_01,diff_10,mul_01,mul_10],axis=2),axis=1)  #(b,4h)
         with tf.variable_scope("pred-layer"):
             fnn1 = self.fnn(input      = pred_info,
                             out_dim    = self.lstm_size,
@@ -217,6 +283,7 @@ class InitModel:
 
             W_pred = tf.get_variable("W_pred", shape=[self.lstm_size, 2],regularizer=tf.contrib.layers.l2_regularizer(self.l2_strength))
             self.pred_info = tf.nn.softmax(tf.matmul(fnn1, W_pred), name="pred")
+
 
     def pred_loss(self):
 
@@ -306,3 +373,4 @@ class InitModel:
             if activation is not None:
                 out = activation(out)
         return out
+
